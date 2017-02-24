@@ -67,7 +67,7 @@
 #include <math.h>
 #include <NIDAQmx.h>
 
-static TaskHandle  AItaskHandle=0,AOtaskHandle=0;
+static TaskHandle  AItaskHandle=0,AOtaskHandle=0,DOtaskHandle=0;
 
 
 #define PI	3.1415926535
@@ -87,36 +87,38 @@ int main(void)
 	char    errBuff[2048]={'\0'};
 	char    trigName[256];
 	float64	AOdata[1000];
-	float64	phase=0.0;
+    uInt32  DOdata[1000];
+    float64	phase=0.0;
+    uInt32  i = 0;
 
 	/*********************************************/
 	// DAQmx Configure Code
 	/*********************************************/
 
     /* 1. Create a task. */
-    DAQmxErrChk (DAQmxCreateTask("",&AItaskHandle));
+	DAQmxErrChk (DAQmxCreateTask("",&AOtaskHandle));
     /* 2. Create an analog input voltage channel. */
-	DAQmxErrChk (DAQmxCreateAIVoltageChan(AItaskHandle,"Dev1/ai0","",DAQmx_Val_Cfg_Default,-10.0,10.0,DAQmx_Val_Volts,NULL));
+	DAQmxErrChk (DAQmxCreateAOVoltageChan(AOtaskHandle,"Dev1/ao0","",-10.0,10.0,DAQmx_Val_Volts,NULL));
     /* 3. Set the rate for the sample clocks.
     Additionally, define the sample modes to be continuous.
     Also, set the sample clock rate for the signal generation. */
-	DAQmxErrChk (DAQmxCfgSampClkTiming(AItaskHandle,"",10000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
+	DAQmxErrChk (DAQmxCfgSampClkTiming(AOtaskHandle,"",5000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
     /* 3a.Call the GetTerminalNameWithDevPrefix function.
     This will take a task and a terminal and create a properly
     formatted device + terminal name to use as the source of 
     the digital sample clock. */
-	DAQmxErrChk (GetTerminalNameWithDevPrefix(AItaskHandle,"ai/StartTrigger",trigName));
+	DAQmxErrChk (GetTerminalNameWithDevPrefix(AOtaskHandle,"ao/StartTrigger",trigName));
     /* Also, create a analog output channel. */
-	DAQmxErrChk (DAQmxCreateTask("",&AOtaskHandle));
-	DAQmxErrChk (DAQmxCreateAOVoltageChan(AOtaskHandle,"Dev1/ao0","",-10.0,10.0,DAQmx_Val_Volts,NULL));
-	DAQmxErrChk (DAQmxCfgSampClkTiming(AOtaskHandle,"",5000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
-	DAQmxErrChk (DAQmxCfgDigEdgeStartTrig(AOtaskHandle,trigName,DAQmx_Val_Rising));
+    DAQmxErrChk (DAQmxCreateTask("",&AItaskHandle));
+	DAQmxErrChk (DAQmxCreateAIVoltageChan(AItaskHandle,"Dev1/ai0","",DAQmx_Val_Cfg_Default,-10.0,10.0,DAQmx_Val_Volts,NULL));
+	DAQmxErrChk (DAQmxCfgSampClkTiming(AItaskHandle,"",5000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
+	DAQmxErrChk (DAQmxCfgDigEdgeStartTrig(AItaskHandle,trigName,DAQmx_Val_Rising));
 
     /* 4. Define the parameters for a digital edge start trigger.
     Set the analog output to trigger off the AI start trigger.
     This is an internal trigger signal. */
 	DAQmxErrChk (DAQmxRegisterEveryNSamplesEvent(AItaskHandle,DAQmx_Val_Acquired_Into_Buffer,1000,0,EveryNCallback,NULL));
-	DAQmxErrChk (DAQmxRegisterDoneEvent(AItaskHandle,0,DoneCallback,NULL));
+	DAQmxErrChk (DAQmxRegisterDoneEvent(AOtaskHandle,0,DoneCallback,NULL));
 
     /* 5. Synthesize a standard waveform(sine, square, or triangle) 
     and load this data into the output RAM buffer. */
@@ -124,14 +126,24 @@ int main(void)
 
 	DAQmxErrChk (DAQmxWriteAnalogF64(AOtaskHandle, 1000, FALSE, 10.0, DAQmx_Val_GroupByChannel, AOdata, NULL, NULL));
 
+    /* 6. DO channels */
+    DAQmxErrChk (DAQmxCreateTask("", &DOtaskHandle));
+    DAQmxErrChk (DAQmxCreateDOChan(DOtaskHandle, "Dev1/port0", "", DAQmx_Val_ChanForAllLines));
+    for (; i<1000; ++i)
+        DOdata[i] = i;
+    
+    DAQmxErrChk (DAQmxCfgSampClkTiming(DOtaskHandle, trigName, 10000.0, DAQmx_Val_Rising, DAQmx_Val_ContSamps, 1000));
+    DAQmxErrChk (DAQmxWriteDigitalU32(DOtaskHandle, 1000, 0, 10.0, DAQmx_Val_GroupByChannel, DOdata, NULL, NULL));
+
 	/*********************************************/
 	// DAQmx Start Code
 	/*********************************************/
     /* 6. Call the start function to arm the two tasks. 
     Make sure the analog output is armed before the analog input.
     This will ensure both will start at the same time. */
+    DAQmxErrChk (DAQmxStartTask(DOtaskHandle));
+    DAQmxErrChk (DAQmxStartTask(AItaskHandle));
 	DAQmxErrChk (DAQmxStartTask(AOtaskHandle));
-	DAQmxErrChk (DAQmxStartTask(AItaskHandle));
 
     /* 7. Read the waveform data continuously until 
     the user hits the stop button or an error occurs. */
@@ -160,6 +172,13 @@ Error:
 		DAQmxClearTask(AOtaskHandle);
 		AOtaskHandle = 0;
 	}
+    if ( DOtaskHandle ) {
+        /*********************************************/
+        // DAQmx Stop Code
+        /*********************************************/
+        DAQmxStopTask(DOtaskHandle);
+        DAQmxClearTask(DOtaskHandle);
+    }
     /* 10. Display an error if any. */
 	if( DAQmxFailed(error) )
 		printf("DAQmx Error: %s\n",errBuff);
@@ -200,7 +219,11 @@ Error:
 			DAQmxClearTask(AOtaskHandle);
 			AOtaskHandle = 0;
 		}
-		printf("DAQmx Error: %s\n",errBuff);
+        if ( DOtaskHandle ) {
+            DAQmxStopTask(DOtaskHandle);
+            DAQmxClearTask(DOtaskHandle);
+        }
+        printf("DAQmx Error: %s\n",errBuff);
 	}
 	return 0;
 }
@@ -227,7 +250,11 @@ Error:
 			DAQmxClearTask(AOtaskHandle);
 			AOtaskHandle = 0;
 		}
-		printf("DAQmx Error: %s\n",errBuff);
+        if (DOtaskHandle) {
+            DAQmxStopTask(DOtaskHandle);
+            DAQmxClearTask(DOtaskHandle);
+        }
+        printf("DAQmx Error: %s\n",errBuff);
 	}
 	return 0;
 }
