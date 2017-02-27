@@ -75,6 +75,7 @@ static TaskHandle  AItaskHandle=0,AOtaskHandle=0,DOtaskHandle=0;
 #define DAQmxErrChk(functionCall) if( DAQmxFailed(error=(functionCall)) ) goto Error; else
 
 int GenSineWave(int numElements, double amplitude, double frequency, double *phase, double sineWave[]);
+int GenPiezoShutterWave(int numElements, double miny, double maxy, int xStart, int xTop, int xEnd, double piezoWave[], uInt32 shutter[]);
 
 static int32 GetTerminalNameWithDevPrefix(TaskHandle taskHandle, const char terminalName[], char triggerName[]);
 
@@ -86,8 +87,8 @@ int main(void)
 	int32   error=0;
 	char    errBuff[2048]={'\0'};
 	char    trigName[256];
-	float64	AOdata[1000];
-    uInt32  DOdata[1000];
+	float64	AOdata[60000];
+    uInt32  DOdata[60000];
     float64	phase=0.0;
     uInt32  i = 0;
 
@@ -97,8 +98,8 @@ int main(void)
 
     /* 1. Create a task. */
 	DAQmxErrChk (DAQmxCreateTask("",&AOtaskHandle));
-    /* 2. Create an analog input voltage channel. */
-	DAQmxErrChk (DAQmxCreateAOVoltageChan(AOtaskHandle,"Dev1/ao0","",-10.0,10.0,DAQmx_Val_Volts,NULL));
+    /* 2. Create an analog output voltage channel. */
+	DAQmxErrChk (DAQmxCreateAOVoltageChan(AOtaskHandle,"Dev2/ao0","",-10.0,10.0,DAQmx_Val_Volts,NULL));
     /* 3. Set the rate for the sample clocks.
     Additionally, define the sample modes to be continuous.
     Also, set the sample clock rate for the signal generation. */
@@ -108,30 +109,31 @@ int main(void)
     formatted device + terminal name to use as the source of 
     the digital sample clock. */
 	DAQmxErrChk (GetTerminalNameWithDevPrefix(AOtaskHandle,"ao/StartTrigger",trigName));
-    /* Also, create a analog output channel. */
+    /* Also, create a analog input channel. */
     DAQmxErrChk (DAQmxCreateTask("",&AItaskHandle));
-	DAQmxErrChk (DAQmxCreateAIVoltageChan(AItaskHandle,"Dev1/ai0","",DAQmx_Val_Cfg_Default,-10.0,10.0,DAQmx_Val_Volts,NULL));
+	DAQmxErrChk (DAQmxCreateAIVoltageChan(AItaskHandle,"Dev2/ai0","",DAQmx_Val_Cfg_Default,-10.0,10.0,DAQmx_Val_Volts,NULL));
 	DAQmxErrChk (DAQmxCfgSampClkTiming(AItaskHandle,"",5000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
 	DAQmxErrChk (DAQmxCfgDigEdgeStartTrig(AItaskHandle,trigName,DAQmx_Val_Rising));
 
     /* 4. Define the parameters for a digital edge start trigger.
-    Set the analog output to trigger off the AI start trigger.
+    Set the analog input to trigger off the AO start trigger.
     This is an internal trigger signal. */
 	DAQmxErrChk (DAQmxRegisterEveryNSamplesEvent(AItaskHandle,DAQmx_Val_Acquired_Into_Buffer,1000,0,EveryNCallback,NULL));
 	DAQmxErrChk (DAQmxRegisterDoneEvent(AOtaskHandle,0,DoneCallback,NULL));
 
     /* 5. Synthesize a standard waveform(sine, square, or triangle) 
     and load this data into the output RAM buffer. */
-	GenSineWave(1000,1.0,1.0/1000,&phase,AOdata);
+	//GenSineWave(1000,1.0,1.0/1000,&phase,AOdata);
+    GenPiezoShutterWave(60000, 1., 10., 200, 900, 1000, AOdata, DOdata);
 
 	DAQmxErrChk (DAQmxWriteAnalogF64(AOtaskHandle, 1000, FALSE, 10.0, DAQmx_Val_GroupByChannel, AOdata, NULL, NULL));
 
     /* 6. DO channels */
     DAQmxErrChk (DAQmxCreateTask("", &DOtaskHandle));
-    DAQmxErrChk (DAQmxCreateDOChan(DOtaskHandle, "Dev1/port0", "", DAQmx_Val_ChanForAllLines));
-    for (; i<1000; ++i)
-        DOdata[i] = i;
-    
+    DAQmxErrChk (DAQmxCreateDOChan(DOtaskHandle, "Dev2/port0", "", DAQmx_Val_ChanForAllLines));
+    //for (; i<1000; ++i) // 0~3:stimuli, 4:Laser Shutter, 5:Camera Shutter
+    //    DOdata[i] = i;
+
     DAQmxErrChk (DAQmxCfgSampClkTiming(DOtaskHandle, trigName, 10000.0, DAQmx_Val_Rising, DAQmx_Val_ContSamps, 1000));
     DAQmxErrChk (DAQmxWriteDigitalU32(DOtaskHandle, 1000, 0, 10.0, DAQmx_Val_GroupByChannel, DOdata, NULL, NULL));
 
@@ -267,6 +269,38 @@ int GenSineWave(int numElements, double amplitude, double frequency, double *pha
 		sineWave[i] = amplitude*sin(PI/180.0*(*phase+360.0*frequency*i));
 	*phase = fmod(*phase+frequency*360.0*numElements,360.0);
 	return 0;
+}
+
+
+int GenPiezoShutterWave(int numElements, double miny, double maxy, int xStart, int xTop, int xEnd, double piezoWave[], uInt32 shutter[])
+{
+    int i = 0;
+    int ii = 0;
+    int j = 0;
+    double slop1, slop2;
+
+    slop1 = (maxy - miny) / (double)(xTop - xStart);
+    slop2 = (miny - maxy) / (double)(xEnd - xTop);
+
+    for (; i < numElements; ++i)
+    {
+        ii = i%xEnd;
+        if (ii >= 0 && ii < xStart)
+            piezoWave[i] = miny;
+        else if (ii >= xStart && ii < xTop)
+            piezoWave[i] = slop1*(double)(ii - xStart) + miny;
+        else
+            piezoWave[i] = slop2*(double)(ii - xTop) + maxy;
+        if (ii >= xStart + 50 && ii < xTop - 50)
+        {
+            j = (ii - 50) % 10;
+            if (j < 7)
+                shutter[i] = 16;
+            else
+                shutter[i] = 0;
+        }
+    }
+    return 0;
 }
 
 static int32 GetTerminalNameWithDevPrefix(TaskHandle taskHandle, const char terminalName[], char triggerName[])
