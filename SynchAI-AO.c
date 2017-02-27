@@ -103,7 +103,7 @@ int main(void)
     /* 3. Set the rate for the sample clocks.
     Additionally, define the sample modes to be continuous.
     Also, set the sample clock rate for the signal generation. */
-	DAQmxErrChk (DAQmxCfgSampClkTiming(AOtaskHandle,"",5000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
+	DAQmxErrChk (DAQmxCfgSampClkTiming(AOtaskHandle,"",6000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,60000));
     /* 3a.Call the GetTerminalNameWithDevPrefix function.
     This will take a task and a terminal and create a properly
     formatted device + terminal name to use as the source of 
@@ -111,7 +111,7 @@ int main(void)
 	DAQmxErrChk (GetTerminalNameWithDevPrefix(AOtaskHandle,"ao/StartTrigger",trigName));
     /* Also, create a analog input channel. */
     DAQmxErrChk (DAQmxCreateTask("",&AItaskHandle));
-	DAQmxErrChk (DAQmxCreateAIVoltageChan(AItaskHandle,"Dev2/ai0","",DAQmx_Val_Cfg_Default,-10.0,10.0,DAQmx_Val_Volts,NULL));
+	DAQmxErrChk (DAQmxCreateAIVoltageChan(AItaskHandle,"Dev2/ai0","", DAQmx_Val_NRSE,-10.0,10.0,DAQmx_Val_Volts,NULL));//DAQmx_Val_Cfg_Default
 	DAQmxErrChk (DAQmxCfgSampClkTiming(AItaskHandle,"",5000.0,DAQmx_Val_Rising,DAQmx_Val_ContSamps,1000));
 	DAQmxErrChk (DAQmxCfgDigEdgeStartTrig(AItaskHandle,trigName,DAQmx_Val_Rising));
 
@@ -134,8 +134,9 @@ int main(void)
     //for (; i<1000; ++i) // 0~3:stimuli, 4:Laser Shutter, 5:Camera Shutter
     //    DOdata[i] = i;
 
-    DAQmxErrChk (DAQmxCfgSampClkTiming(DOtaskHandle, trigName, 10000.0, DAQmx_Val_Rising, DAQmx_Val_ContSamps, 1000));
-    DAQmxErrChk (DAQmxWriteDigitalU32(DOtaskHandle, 1000, 0, 10.0, DAQmx_Val_GroupByChannel, DOdata, NULL, NULL));
+    DAQmxErrChk (DAQmxCfgSampClkTiming(DOtaskHandle, "", 6000.0, DAQmx_Val_Rising, DAQmx_Val_ContSamps, 60000));
+    DAQmxErrChk (DAQmxCfgDigEdgeStartTrig(DOtaskHandle, trigName, DAQmx_Val_Rising));
+    DAQmxErrChk (DAQmxWriteDigitalU32(DOtaskHandle, 60000, 0, 10.0, DAQmx_Val_GroupByChannel, DOdata, NULL, NULL));
 
 	/*********************************************/
 	// DAQmx Start Code
@@ -202,7 +203,7 @@ int32 CVICALLBACK EveryNCallback(TaskHandle taskHandle, int32 everyNsamplesEvent
 	/*********************************************/
 	DAQmxErrChk (DAQmxReadAnalogF64(AItaskHandle,1000,10.0,DAQmx_Val_GroupByChannel,AIdata,1000,&readAI,NULL));
 
-	printf("\t%d\t\t%d\r",(int)readAI,(int)(totalAI+=readAI));
+	printf("\t%d\t\t%d\t%1.2f\r",(int)readAI,(int)(totalAI+=readAI),AIdata[(totalAI/10)%1000]);
 	fflush(stdout);
 
 Error:
@@ -282,11 +283,13 @@ int GenPiezoShutterWave(int numElements, double miny, double maxy, int xStart, i
     slop1 = (maxy - miny) / (double)(xTop - xStart);
     slop2 = (miny - maxy) / (double)(xEnd - xTop);
 
-    for (; i < numElements; ++i)
+    for (; i < numElements; i++)
     {
         ii = i%xEnd;
         if (ii >= 0 && ii < xStart)
             piezoWave[i] = miny;
+        else if (ii >= xStart+50 && ii < xStart+60)
+            piezoWave[i] = 10;
         else if (ii >= xStart && ii < xTop)
             piezoWave[i] = slop1*(double)(ii - xStart) + miny;
         else
@@ -295,10 +298,12 @@ int GenPiezoShutterWave(int numElements, double miny, double maxy, int xStart, i
         {
             j = (ii - 50) % 10;
             if (j < 7)
-                shutter[i] = 16;
+                shutter[i] = 0xffffffff;
             else
                 shutter[i] = 0;
         }
+        else
+            shutter[i] = 0;
     }
     return 0;
 }
